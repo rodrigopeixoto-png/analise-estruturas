@@ -6,8 +6,8 @@ import ezdxf
 import tempfile
 import os
 
-st.set_page_config(page_title="Ftool Web - Cargas Locais e Globais", layout="wide")
-st.title("🏗️ Ftool Web: Cargas Locais/Globais, Multi-Seleção e Perfis C")
+st.set_page_config(page_title="Ftool Web - Seleção e Deseleção", layout="wide")
+st.title("🏗️ Ftool Web: Seleção e Deseleção Interativa, DXF e Perfis C")
 
 # -----------------------------------------------------------------------------
 # 1. CATÁLOGO DE MATERIAIS E SEÇÕES (Laminados e Dobrados C)
@@ -55,7 +55,6 @@ LISTA_MATERIAIS = list(MATERIAIS.keys())
 # 2. FUNÇÕES GEOMÉTRICAS: SEGMENTAÇÃO DXF, CAIXA E ÂNGULOS LOCAIS
 # -----------------------------------------------------------------------------
 def segmentar_linhas_com_nos(linhas_brutas, nos_unicos, tol=0.005):
-    """Subdivide linhas contínuas em barras individuais onde nós intermediários se encontram."""
     barras_finais = []
     for p1, p2 in linhas_brutas:
         x1, y1 = p1
@@ -94,7 +93,6 @@ def segmentar_linhas_com_nos(linhas_brutas, nos_unicos, tol=0.005):
     return barras_unicas
 
 def linha_intercepta_caixa(x1, y1, x2, y2, xmin, xmax, ymin, ymax):
-    """Verifica se um segmento de reta passa por dentro ou toca uma caixa delimitadora."""
     if (xmin <= x1 <= xmax and ymin <= y1 <= ymax) or (xmin <= x2 <= xmax and ymin <= y2 <= ymax):
         return True
     xm, ym = (x1 + x2) / 2, (y1 + y2) / 2
@@ -116,7 +114,6 @@ def linha_intercepta_caixa(x1, y1, x2, y2, xmin, xmax, ymin, ymax):
     return False
 
 def calcular_angulos_locais_nos(sel_nos, dados_barras, coords_map):
-    """Determina a inclinação local média da barra/banzo conectada a cada nó selecionado."""
     angulos = {}
     for nid in sel_nos:
         ang_candidatos = []
@@ -154,11 +151,11 @@ if 'dados_nos' not in st.session_state:
 if 'dados_barras' not in st.session_state:
     st.session_state.dados_barras = []
 if 'sel_nos' not in st.session_state:
-    st.session_state.sel_nos = [1]
+    st.session_state.sel_nos = []
 if 'sel_barras' not in st.session_state:
-    st.session_state.sel_barras = [1]
-if 'last_processed_sig' not in st.session_state:
-    st.session_state.last_processed_sig = None
+    st.session_state.sel_barras = []
+if 'event_counter' not in st.session_state:
+    st.session_state.event_counter = 0
 
 # -----------------------------------------------------------------------------
 # 4. UPLOAD DXF
@@ -220,9 +217,8 @@ if arquivo_dxf is not None and st.button("Processar DXF com Segmentação Autom�
             {"Barra": i+1, "Nó Inic.": no_map[b[0]], "Nó Final": no_map[b[1]], "Material": LISTA_MATERIAIS[0], "Seção": LISTA_SECOES[0]}
             for i, b in enumerate(barras_dxf)
         ]
-        st.session_state.sel_nos = [1]
-        st.session_state.sel_barras = [1]
-        st.session_state.last_processed_sig = None
+        st.session_state.sel_nos = []
+        st.session_state.sel_barras = []
         st.success(f"Geometria segmentada: {len(nos_lista)} nós e {len(barras_dxf)} barras individuais geradas.")
         st.rerun()
     except Exception as e:
@@ -242,31 +238,49 @@ if not st.session_state.dados_nos:
     ]
 
 # -----------------------------------------------------------------------------
-# 5. CONTROLES DE INTERAÇÃO E EXIBIÇÃO
+# 5. FERRAMENTAS DE SELEÇÃO E DESELEÇÃO (BARRA DE CONTROLE)
 # -----------------------------------------------------------------------------
 st.subheader("2. Geometria Interativa")
 
-col_ferramentas1, col_ferramentas2, col_ferramentas3 = st.columns([1.1, 1.1, 0.9])
-with col_ferramentas1:
+col_f1, col_f2, col_f3, col_f4 = st.columns([1.2, 1.2, 1.0, 1.0])
+
+with col_f1:
     modo_mouse = st.radio(
-        "Ação ao Arrastar o Mouse:",
-        ["📦 Seleção por Caixa (Retângulo)", "🖐️ Mover / Enquadrar (Pan)"],
-        horizontal=False
+        "🛠️ Ferramenta Ativa no Desenho:",
+        [
+            "👆 Clique Individual (Selecionar / Desmarcar)",
+            "📦 Caixa de Seleção (Arrastar Retângulo)",
+            "🖐️ Mover e Zoom (Pan)"
+        ],
+        index=0
     )
-with col_ferramentas2:
+
+with col_f2:
+    acao_selecao = st.radio(
+        "⚡ Ao Clicar ou Abrir Caixa:",
+        [
+            "🔄 Alternar (Seleciona se livre, Desmarca se selecionado)",
+            "➖ Deselecionar (Remover da seleção)",
+            "➕ Adicionar à Seleção",
+            "✨ Substituir (Manter apenas o que foi tocado)"
+        ],
+        index=0
+    )
+
+with col_f3:
     alvo_caixa = st.radio(
-        "Ao arrastar a caixa, selecionar:",
+        "🎯 Elemento Alvo:",
         ["Ambos (Nós e Barras)", "Apenas Barras", "Apenas Nós"],
-        horizontal=False
+        index=0
     )
-with col_ferramentas3:
-    modo_selecao = st.radio(
-        "Modo de Seleção:",
-        ["➕ Acumulativo", "🔄 Substituir"],
-        horizontal=False
-    )
+
+with col_f4:
     mostrar_ids = st.checkbox("Mostrar Rótulos dos Nós", value=True)
     mostrar_valores_cargas = st.checkbox("Mostrar Valores nas Cargas", value=True)
+    if st.button("❌ Desmarcar Tudo (Limpar Seleção)", use_container_width=True):
+        st.session_state.sel_nos = []
+        st.session_state.sel_barras = []
+        st.rerun()
 
 # -----------------------------------------------------------------------------
 # 6. MONTAGEM DO GRÁFICO PLOTLY
@@ -314,7 +328,7 @@ for b in st.session_state.dados_barras:
         hover_barras.append(f"<b>Barra {b['Barra']}</b><br>Nós: {n1} → {n2}<br>Seção: {b['Seção']}<br>Mat: {b['Material']}")
 
 cores_barras = ['magenta' if bid in st.session_state.sel_barras else '#4682b4' for bid in ids_barras]
-tamanhos_barras = [12 if bid in st.session_state.sel_barras else 8 for bid in ids_barras]
+tamanhos_barras = [13 if bid in st.session_state.sel_barras else 8 for bid in ids_barras]
 
 fig.add_trace(go.Scatter(
     x=x_mid,
@@ -401,7 +415,12 @@ fig.add_trace(go.Scatter(
     name='Nós'
 ))
 
-drag_val = "select" if "Caixa" in modo_mouse else "pan"
+if "Caixa" in modo_mouse:
+    drag_val = "select"
+elif "Clique" in modo_mouse:
+    drag_val = False
+else:
+    drag_val = "pan"
 
 fig.update_layout(
     height=450,
@@ -423,81 +442,79 @@ event_chart = st.plotly_chart(
     fig, 
     use_container_width=True, 
     on_select="rerun", 
-    key="main_plot", 
+    key=f"plot_canvas_{st.session_state.event_counter}", 
     config=config_grafico
 )
 
 # -----------------------------------------------------------------------------
-# 7. PROCESSAMENTO GEOMÉTRICO DA SELEÇÃO
+# 7. MOTOR DE PROCESSAMENTO DA SELEÇÃO E DESELEÇÃO
 # -----------------------------------------------------------------------------
 if event_chart and "selection" in event_chart:
     sel = event_chart["selection"]
     boxes = sel.get("box", [])
     pts = sel.get("points", [])
 
-    if boxes or pts:
-        sig = f"box:{boxes}|pts:{[p.get('customdata') for p in pts if 'customdata' in p]}"
-        
-        if sig != st.session_state.last_processed_sig:
-            st.session_state.last_processed_sig = sig
-            box_nos, box_barras = [], []
+    alvos_nos = []
+    alvos_barras = []
 
-            if boxes:
-                for b in boxes:
-                    xb = b.get("x", [])
-                    yb = b.get("y", [])
-                    if len(xb) >= 2 and len(yb) >= 2:
-                        xmin, xmax = min(xb), max(xb)
-                        ymin, ymax = min(yb), max(yb)
+    if boxes:
+        for b in boxes:
+            xb = b.get("x", [])
+            yb = b.get("y", [])
+            if len(xb) >= 2 and len(yb) >= 2:
+                xmin, xmax = min(xb), max(xb)
+                ymin, ymax = min(yb), max(yb)
 
-                        if alvo_caixa in ["Ambos (Nós e Barras)", "Apenas Nós"]:
-                            for n in st.session_state.dados_nos:
-                                if xmin <= n['X'] <= xmax and ymin <= n['Y'] <= ymax:
-                                    box_nos.append(n['Nó'])
-
-                        if alvo_caixa in ["Ambos (Nós e Barras)", "Apenas Barras"]:
-                            for bar in st.session_state.dados_barras:
-                                n1, n2 = bar['Nó Inic.'], bar['Nó Final']
-                                if n1 in coords_map and n2 in coords_map:
-                                    x1, y1 = coords_map[n1]
-                                    x2, y2 = coords_map[n2]
-                                    if linha_intercepta_caixa(x1, y1, x2, y2, xmin, xmax, ymin, ymax):
-                                        box_barras.append(bar['Barra'])
-
-            elif pts:
-                for p in pts:
-                    cdata = str(p.get("customdata", ""))
-                    if cdata.startswith("no_"):
-                        box_nos.append(int(cdata.replace("no_", "")))
-                    elif cdata.startswith("barra_"):
-                        box_barras.append(int(cdata.replace("barra_", "")))
-
-            if "Acumulativo" in modo_selecao:
-                if not boxes and len(pts) == 1:
-                    if box_barras:
-                        bid = box_barras[0]
-                        if bid in st.session_state.sel_barras:
-                            st.session_state.sel_barras.remove(bid)
-                        else:
-                            st.session_state.sel_barras.append(bid)
-                    if box_nos:
-                        nid = box_nos[0]
-                        if nid in st.session_state.sel_nos:
-                            st.session_state.sel_nos.remove(nid)
-                        else:
-                            st.session_state.sel_nos.append(nid)
-                else:
-                    if box_barras:
-                        st.session_state.sel_barras = sorted(list(set(st.session_state.sel_barras).union(box_barras)))
-                    if box_nos:
-                        st.session_state.sel_nos = sorted(list(set(st.session_state.sel_nos).union(box_nos)))
-            else:
-                if alvo_caixa in ["Ambos (Nós e Barras)", "Apenas Barras"]:
-                    st.session_state.sel_barras = sorted(list(set(box_barras)))
                 if alvo_caixa in ["Ambos (Nós e Barras)", "Apenas Nós"]:
-                    st.session_state.sel_nos = sorted(list(set(box_nos)))
+                    for n in st.session_state.dados_nos:
+                        if xmin <= n['X'] <= xmax and ymin <= n['Y'] <= ymax:
+                            alvos_nos.append(n['Nó'])
 
-            st.rerun()
+                if alvo_caixa in ["Ambos (Nós e Barras)", "Apenas Barras"]:
+                    for bar in st.session_state.dados_barras:
+                        n1, n2 = bar['Nó Inic.'], bar['Nó Final']
+                        if n1 in coords_map and n2 in coords_map:
+                            x1, y1 = coords_map[n1]
+                            x2, y2 = coords_map[n2]
+                            if linha_intercepta_caixa(x1, y1, x2, y2, xmin, xmax, ymin, ymax):
+                                alvos_barras.append(bar['Barra'])
+
+    elif pts:
+        for p in pts:
+            cdata = str(p.get("customdata", ""))
+            if cdata.startswith("no_"):
+                alvos_nos.append(int(cdata.replace("no_", "")))
+            elif cdata.startswith("barra_"):
+                alvos_barras.append(int(cdata.replace("barra_", "")))
+
+    if alvos_nos or alvos_barras:
+        set_nos = set(st.session_state.sel_nos)
+        set_barras = set(st.session_state.sel_barras)
+
+        if "Alternar" in acao_selecao:
+            for n in alvos_nos:
+                if n in set_nos: set_nos.remove(n)
+                else: set_nos.add(n)
+            for b in alvos_barras:
+                if b in set_barras: set_barras.remove(b)
+                else: set_barras.add(b)
+
+        elif "Deselecionar" in acao_selecao:
+            set_nos.difference_update(alvos_nos)
+            set_barras.difference_update(alvos_barras)
+
+        elif "Adicionar" in acao_selecao:
+            set_nos.update(alvos_nos)
+            set_barras.update(alvos_barras)
+
+        elif "Substituir" in acao_selecao:
+            set_nos = set(alvos_nos) if alvos_nos else set()
+            set_barras = set(alvos_barras) if alvos_barras else set()
+
+        st.session_state.sel_nos = sorted(list(set_nos))
+        st.session_state.sel_barras = sorted(list(set_barras))
+        st.session_state.event_counter += 1
+        st.rerun()
 
 # -----------------------------------------------------------------------------
 # 8. PAINEL DE ATRIBUIÇÃO EM LOTE: LOCAL VS GLOBAL
@@ -511,23 +528,20 @@ with col_p1:
     nos_selecionados_validos = [nid for nid in st.session_state.sel_nos if nid in todos_nos_ids]
 
     sel_nos_input = st.multiselect(
-        "Nós Selecionados (ou arraste uma caixa no desenho):",
+        "Nós Selecionados (ou use as ferramentas do desenho):",
         options=todos_nos_ids,
         default=nos_selecionados_validos
     )
     if set(sel_nos_input) != set(st.session_state.sel_nos):
         st.session_state.sel_nos = sel_nos_input
-        st.session_state.last_processed_sig = "manual_nos"
         st.rerun()
 
     c_btn1, c_btn2 = st.columns(2)
     if c_btn1.button("Selecionar Todos os Nós"):
         st.session_state.sel_nos = todos_nos_ids
-        st.session_state.last_processed_sig = "manual_all_nos"
         st.rerun()
-    if c_btn2.button("Limpar Seleção de Nós"):
+    if c_btn2.button("Desmarcar Todos os Nós"):
         st.session_state.sel_nos = []
-        st.session_state.last_processed_sig = "manual_clear_nos"
         st.rerun()
 
     st.caption(f"**{len(st.session_state.sel_nos)} nó(s) selecionado(s)**")
@@ -584,7 +598,6 @@ with col_p1:
                         st.session_state.dados_nos[idx]["Fy (kN)"] = fy_in
                     else:
                         theta = np.radians(ang_ref_deg) if ang_ref_deg is not None else angulos_locais_dict.get(nid, 0.0)
-                        # Decomposição exata: Tangente = (cos θ, sin θ), Normal = (-sin θ, cos θ)
                         fx_calc = f_par * np.cos(theta) - f_perp * np.sin(theta)
                         fy_calc = f_par * np.sin(theta) + f_perp * np.cos(theta)
                         st.session_state.dados_nos[idx]["Fx (kN)"] = round(fx_calc, 4)
@@ -599,23 +612,20 @@ with col_p2:
     barras_selecionadas_validas = [bid for bid in st.session_state.sel_barras if bid in todas_barras_ids]
 
     sel_barras_input = st.multiselect(
-        "Barras Selecionadas (ou arraste uma caixa no desenho):",
+        "Barras Selecionadas (ou use as ferramentas do desenho):",
         options=todas_barras_ids,
         default=barras_selecionadas_validas
     )
     if set(sel_barras_input) != set(st.session_state.sel_barras):
         st.session_state.sel_barras = sel_barras_input
-        st.session_state.last_processed_sig = "manual_barras"
         st.rerun()
 
     c_bar1, c_bar2 = st.columns(2)
     if c_bar1.button("Selecionar Todas as Barras"):
         st.session_state.sel_barras = todas_barras_ids
-        st.session_state.last_processed_sig = "manual_all_barras"
         st.rerun()
-    if c_bar2.button("Limpar Seleção de Barras"):
+    if c_bar2.button("Desmarcar Todas as Barras"):
         st.session_state.sel_barras = []
-        st.session_state.last_processed_sig = "manual_clear_barras"
         st.rerun()
 
     st.caption(f"**{len(st.session_state.sel_barras)} barra(s) selecionada(s)**")
