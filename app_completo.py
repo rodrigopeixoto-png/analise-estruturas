@@ -64,7 +64,6 @@ if not dados_nos_iniciais:
         {"Barra": 3, "Nó Inic.": 3, "Nó Final": 4, "E (GPa)": 200.0, "A (cm²)": 50.0, "I (cm⁴)": 10000.0},
     ]
 
-# Layout para edição e visualização simultânea
 col1, col2 = st.columns([1, 1])
 
 with col1:
@@ -75,27 +74,27 @@ with col1:
 
 with col2:
     st.subheader("3. Pré-visualização da Estrutura")
-    fig_preview, ax_preview = plt.subplots(figsize=(6, 4))
+    mostrar_ids = st.checkbox("Mostrar IDs dos Nós (Desligue para estruturas muito densas)", value=False)
     
-    # Dicionário de nós editados para plotar
+    # Aumentado o figsize para dar mais espaço à estrutura
+    fig_preview, ax_preview = plt.subplots(figsize=(10, 6)) 
+    
     coords_nos = {row['Nó']: (row['X'], row['Y']) for _, row in tabela_nos.iterrows()}
     
-    # Plotar Barras
     for _, row in tabela_barras.iterrows():
         n1, n2 = row['Nó Inic.'], row['Nó Final']
         if n1 in coords_nos and n2 in coords_nos:
             x1, y1 = coords_nos[n1]
             x2, y2 = coords_nos[n2]
-            ax_preview.plot([x1, x2], [y1, y2], color='blue', linewidth=2, zorder=1)
+            ax_preview.plot([x1, x2], [y1, y2], color='blue', linewidth=1.5, zorder=1)
             
-    # Plotar Nós e IDs
     for no_id, (x, y) in coords_nos.items():
-        ax_preview.scatter(x, y, color='red', s=50, zorder=2)
-        # Adicionar o texto do ID do nó ligeiramente deslocado
-        ax_preview.annotate(f"Nó {int(no_id)}", (x, y), textcoords="offset points", xytext=(5,5), ha='left', fontsize=10, fontweight='bold', color='darkred')
+        ax_preview.scatter(x, y, color='red', s=20, zorder=2)
+        if mostrar_ids:
+            ax_preview.annotate(f"{int(no_id)}", (x, y), textcoords="offset points", xytext=(3,3), ha='left', fontsize=8, color='darkred')
 
     ax_preview.set_aspect('equal')
-    ax_preview.grid(True, linestyle=':')
+    ax_preview.grid(True, linestyle=':', alpha=0.6)
     ax_preview.set_xlabel("X (m)")
     ax_preview.set_ylabel("Y (m)")
     st.pyplot(fig_preview)
@@ -178,7 +177,7 @@ if st.button("▶️ Calcular Estrutura e Ver Resultados", use_container_width=T
         with col_res1:
             st.success("✅ Estrutura calculada com sucesso!")
             st.subheader("4. Vista Deformada")
-            fig_def, ax_def = plt.subplots(figsize=(6, 4))
+            fig_def, ax_def = plt.subplots(figsize=(10, 6))
             escala = 30
             
             for i, row in tabela_barras.iterrows():
@@ -195,10 +194,10 @@ if st.button("▶️ Calcular Estrutura e Ver Resultados", use_container_width=T
                 y2_def = y2 + U_global[idx2+1] * escala
                 
                 ax_def.plot([x1, x2], [y1, y2], color='gray', linestyle='--', linewidth=1, label="Original" if i==0 else "")
-                ax_def.plot([x1_def, x2_def], [y1_def, y2_def], marker='o', color='red', linewidth=2, label="Deformada" if i==0 else "")
+                ax_def.plot([x1_def, x2_def], [y1_def, y2_def], marker='o', markersize=3, color='red', linewidth=1.5, label="Deformada" if i==0 else "")
             
             ax_def.set_aspect('equal')
-            ax_def.grid(True, linestyle=':')
+            ax_def.grid(True, linestyle=':', alpha=0.6)
             handles, labels = ax_def.get_legend_handles_labels()
             by_label = dict(zip(labels, handles))
             ax_def.legend(by_label.values(), by_label.keys())
