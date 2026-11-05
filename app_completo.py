@@ -5,9 +5,10 @@ import plotly.graph_objects as go
 import ezdxf
 import tempfile
 import os
+import time
 
-st.set_page_config(page_title="Ftool Web - Seleção e Deseleção", layout="wide")
-st.title("🏗️ Ftool Web: Seleção e Deseleção Interativa, DXF e Perfis C")
+st.set_page_config(page_title="Ftool Web - Zoom Persistente", layout="wide")
+st.title("🏗️ Ftool Web: Zoom Fixo, Seleção Interativa e Perfis C")
 
 # -----------------------------------------------------------------------------
 # 1. CATÁLOGO DE MATERIAIS E SEÇÕES (Laminados e Dobrados C)
@@ -154,11 +155,88 @@ if 'sel_nos' not in st.session_state:
     st.session_state.sel_nos = []
 if 'sel_barras' not in st.session_state:
     st.session_state.sel_barras = []
-if 'event_counter' not in st.session_state:
-    st.session_state.event_counter = 0
+if 'zoom_id' not in st.session_state:
+    st.session_state.zoom_id = "zoom_inicial"
+if 'acao_selecao' not in st.session_state:
+    st.session_state.acao_selecao = "🔄 Alternar (Seleciona se livre, Desmarca se selecionado)"
+if 'alvo_caixa' not in st.session_state:
+    st.session_state.alvo_caixa = "Ambos (Nós e Barras)"
 
 # -----------------------------------------------------------------------------
-# 4. UPLOAD DXF
+# 4. CALLBACK DE SELEÇÃO NO PLOTLY (PRESERVA O ZOOM)
+# -----------------------------------------------------------------------------
+def processar_selecao_grafico():
+    chart_state = st.session_state.get("main_plot")
+    if not chart_state:
+        return
+    
+    sel = getattr(chart_state, "selection", None) or chart_state.get("selection", {})
+    boxes = getattr(sel, "box", None) or sel.get("box", [])
+    pts = getattr(sel, "points", None) or sel.get("points", [])
+
+    coords_map = {n['Nó']: (n['X'], n['Y']) for n in st.session_state.dados_nos}
+    alvos_nos = []
+    alvos_barras = []
+
+    if boxes:
+        for b in boxes:
+            xb = getattr(b, "x", None) or b.get("x", [])
+            yb = getattr(b, "y", None) or b.get("y", [])
+            if len(xb) >= 2 and len(yb) >= 2:
+                xmin, xmax = min(xb), max(xb)
+                ymin, ymax = min(yb), max(yb)
+
+                if st.session_state.alvo_caixa in ["Ambos (Nós e Barras)", "Apenas Nós"]:
+                    for n in st.session_state.dados_nos:
+                        if xmin <= n['X'] <= xmax and ymin <= n['Y'] <= ymax:
+                            alvos_nos.append(n['Nó'])
+
+                if st.session_state.alvo_caixa in ["Ambos (Nós e Barras)", "Apenas Barras"]:
+                    for bar in st.session_state.dados_barras:
+                        n1, n2 = bar['Nó Inic.'], bar['Nó Final']
+                        if n1 in coords_map and n2 in coords_map:
+                            x1, y1 = coords_map[n1]
+                            x2, y2 = coords_map[n2]
+                            if linha_intercepta_caixa(x1, y1, x2, y2, xmin, xmax, ymin, ymax):
+                                alvos_barras.append(bar['Barra'])
+
+    elif pts:
+        for p in pts:
+            cdata = str(getattr(p, "customdata", None) or p.get("customdata", ""))
+            if cdata.startswith("no_"):
+                alvos_nos.append(int(cdata.replace("no_", "")))
+            elif cdata.startswith("barra_"):
+                alvos_barras.append(int(cdata.replace("barra_", "")))
+
+    if alvos_nos or alvos_barras:
+        set_nos = set(st.session_state.sel_nos)
+        set_barras = set(st.session_state.sel_barras)
+
+        if "Alternar" in st.session_state.acao_selecao:
+            for n in alvos_nos:
+                if n in set_nos: set_nos.remove(n)
+                else: set_nos.add(n)
+            for b in alvos_barras:
+                if b in set_barras: set_barras.remove(b)
+                else: set_barras.add(b)
+
+        elif "Deselecionar" in st.session_state.acao_selecao:
+            set_nos.difference_update(alvos_nos)
+            set_barras.difference_update(alvos_barras)
+
+        elif "Adicionar" in st.session_state.acao_selecao:
+            set_nos.update(alvos_nos)
+            set_barras.update(alvos_barras)
+
+        elif "Substituir" in st.session_state.acao_selecao:
+            set_nos = set(alvos_nos) if alvos_nos else set()
+            set_barras = set(alvos_barras) if alvos_barras else set()
+
+        st.session_state.sel_nos = sorted(list(set_nos))
+        st.session_state.sel_barras = sorted(list(set_barras))
+
+# -----------------------------------------------------------------------------
+# 5. UPLOAD DXF
 # -----------------------------------------------------------------------------
 st.subheader("1. Importar Geometria (DXF)")
 arquivo_dxf = st.file_uploader("Arraste seu arquivo .dxf aqui", type=['dxf'])
@@ -219,6 +297,7 @@ if arquivo_dxf is not None and st.button("Processar DXF com Segmentação Autom�
         ]
         st.session_state.sel_nos = []
         st.session_state.sel_barras = []
+        st.session_state.zoom_id = str(time.time())
         st.success(f"Geometria segmentada: {len(nos_lista)} nós e {len(barras_dxf)} barras individuais geradas.")
         st.rerun()
     except Exception as e:
@@ -238,7 +317,7 @@ if not st.session_state.dados_nos:
     ]
 
 # -----------------------------------------------------------------------------
-# 5. FERRAMENTAS DE SELEÇÃO E DESELEÇÃO (BARRA DE CONTROLE)
+# 6. FERRAMENTAS DE INTERAÇÃO E VISUALIZAÇÃO
 # -----------------------------------------------------------------------------
 st.subheader("2. Geometria Interativa")
 
@@ -256,7 +335,7 @@ with col_f1:
     )
 
 with col_f2:
-    acao_selecao = st.radio(
+    st.radio(
         "⚡ Ao Clicar ou Abrir Caixa:",
         [
             "🔄 Alternar (Seleciona se livre, Desmarca se selecionado)",
@@ -264,26 +343,31 @@ with col_f2:
             "➕ Adicionar à Seleção",
             "✨ Substituir (Manter apenas o que foi tocado)"
         ],
-        index=0
+        key="acao_selecao"
     )
 
 with col_f3:
-    alvo_caixa = st.radio(
+    st.radio(
         "🎯 Elemento Alvo:",
         ["Ambos (Nós e Barras)", "Apenas Barras", "Apenas Nós"],
-        index=0
+        key="alvo_caixa"
     )
 
 with col_f4:
     mostrar_ids = st.checkbox("Mostrar Rótulos dos Nós", value=True)
     mostrar_valores_cargas = st.checkbox("Mostrar Valores nas Cargas", value=True)
-    if st.button("❌ Desmarcar Tudo (Limpar Seleção)", use_container_width=True):
+    
+    c_btn_a, c_btn_b = st.columns(2)
+    if c_btn_a.button("❌ Desmarcar Tudo", use_container_width=True):
         st.session_state.sel_nos = []
         st.session_state.sel_barras = []
         st.rerun()
+    if c_btn_b.button("🔍 Enquadrar Tudo", use_container_width=True):
+        st.session_state.zoom_id = str(time.time())
+        st.rerun()
 
 # -----------------------------------------------------------------------------
-# 6. MONTAGEM DO GRÁFICO PLOTLY
+# 7. MONTAGEM DO GRÁFICO (CHAVE E UIREVISION ESTÁVEIS)
 # -----------------------------------------------------------------------------
 coords_map = {n['Nó']: (n['X'], n['Y']) for n in st.session_state.dados_nos}
 fig = go.Figure()
@@ -294,7 +378,7 @@ span_x = max(all_x) - min(all_x) if all_x else 10.0
 span_y = max(all_y) - min(all_y) if all_y else 2.0
 s_dim = max(span_x, span_y, 1.0) * 0.025
 
-# 6.1 Barras da Estrutura
+# 7.1 Linhas das Barras
 x_norm, y_norm = [], []
 x_sel, y_sel = [], []
 
@@ -315,7 +399,7 @@ if x_norm:
 if x_sel:
     fig.add_trace(go.Scatter(x=x_sel, y=y_sel, mode='lines', line=dict(color='magenta', width=4.5), hoverinfo='skip', showlegend=False))
 
-# 6.2 Marcadores Centrais de Barras (Losangos Clicáveis)
+# 7.2 Losangos Centrais das Barras (Clicáveis)
 x_mid, y_mid, ids_barras, hover_barras = [], [], [], []
 for b in st.session_state.dados_barras:
     n1, n2 = b['Nó Inic.'], b['Nó Final']
@@ -341,7 +425,7 @@ fig.add_trace(go.Scatter(
     name='Barras'
 ))
 
-# 6.3 Símbolos de Apoios e Cargas
+# 7.3 Apoios e Cargas
 for n in st.session_state.dados_nos:
     x, y = n['X'], n['Y']
     ap_x, ap_y, ap_rot = n['Apoio X'], n['Apoio Y'], n['Apoio Rot']
@@ -382,7 +466,7 @@ for n in st.session_state.dados_nos:
             bordercolor="purple", borderwidth=1
         )
 
-# 6.4 Nós da Estrutura
+# 7.4 Nós da Estrutura
 x_pts, y_pts, nos_ids, txt_hover = [], [], [], []
 for n in st.session_state.dados_nos:
     x_pts.append(n['X'])
@@ -429,7 +513,7 @@ fig.update_layout(
     yaxis=dict(showgrid=True, zeroline=False),
     dragmode=drag_val,
     clickmode="event+select",
-    uirevision="persist_zoom"
+    uirevision=st.session_state.zoom_id  # Mantém o zoom estritamente intacto
 )
 
 config_grafico = {
@@ -438,83 +522,13 @@ config_grafico = {
     'modeBarButtonsToAdd': ['select2d', 'pan2d']
 }
 
-event_chart = st.plotly_chart(
+st.plotly_chart(
     fig, 
     use_container_width=True, 
-    on_select="rerun", 
-    key=f"plot_canvas_{st.session_state.event_counter}", 
+    on_select=processar_selecao_grafico,
+    key="main_plot", 
     config=config_grafico
 )
-
-# -----------------------------------------------------------------------------
-# 7. MOTOR DE PROCESSAMENTO DA SELEÇÃO E DESELEÇÃO
-# -----------------------------------------------------------------------------
-if event_chart and "selection" in event_chart:
-    sel = event_chart["selection"]
-    boxes = sel.get("box", [])
-    pts = sel.get("points", [])
-
-    alvos_nos = []
-    alvos_barras = []
-
-    if boxes:
-        for b in boxes:
-            xb = b.get("x", [])
-            yb = b.get("y", [])
-            if len(xb) >= 2 and len(yb) >= 2:
-                xmin, xmax = min(xb), max(xb)
-                ymin, ymax = min(yb), max(yb)
-
-                if alvo_caixa in ["Ambos (Nós e Barras)", "Apenas Nós"]:
-                    for n in st.session_state.dados_nos:
-                        if xmin <= n['X'] <= xmax and ymin <= n['Y'] <= ymax:
-                            alvos_nos.append(n['Nó'])
-
-                if alvo_caixa in ["Ambos (Nós e Barras)", "Apenas Barras"]:
-                    for bar in st.session_state.dados_barras:
-                        n1, n2 = bar['Nó Inic.'], bar['Nó Final']
-                        if n1 in coords_map and n2 in coords_map:
-                            x1, y1 = coords_map[n1]
-                            x2, y2 = coords_map[n2]
-                            if linha_intercepta_caixa(x1, y1, x2, y2, xmin, xmax, ymin, ymax):
-                                alvos_barras.append(bar['Barra'])
-
-    elif pts:
-        for p in pts:
-            cdata = str(p.get("customdata", ""))
-            if cdata.startswith("no_"):
-                alvos_nos.append(int(cdata.replace("no_", "")))
-            elif cdata.startswith("barra_"):
-                alvos_barras.append(int(cdata.replace("barra_", "")))
-
-    if alvos_nos or alvos_barras:
-        set_nos = set(st.session_state.sel_nos)
-        set_barras = set(st.session_state.sel_barras)
-
-        if "Alternar" in acao_selecao:
-            for n in alvos_nos:
-                if n in set_nos: set_nos.remove(n)
-                else: set_nos.add(n)
-            for b in alvos_barras:
-                if b in set_barras: set_barras.remove(b)
-                else: set_barras.add(b)
-
-        elif "Deselecionar" in acao_selecao:
-            set_nos.difference_update(alvos_nos)
-            set_barras.difference_update(alvos_barras)
-
-        elif "Adicionar" in acao_selecao:
-            set_nos.update(alvos_nos)
-            set_barras.update(alvos_barras)
-
-        elif "Substituir" in acao_selecao:
-            set_nos = set(alvos_nos) if alvos_nos else set()
-            set_barras = set(alvos_barras) if alvos_barras else set()
-
-        st.session_state.sel_nos = sorted(list(set_nos))
-        st.session_state.sel_barras = sorted(list(set_barras))
-        st.session_state.event_counter += 1
-        st.rerun()
 
 # -----------------------------------------------------------------------------
 # 8. PAINEL DE ATRIBUIÇÃO EM LOTE: LOCAL VS GLOBAL
@@ -579,7 +593,6 @@ with col_p1:
         f_perp = cf1.number_input("F⟂ Normal / Perpendicular (kN)", value=0.0, help="+ Para fora (Sucção), - Para dentro (Pressão/Sobrecarga)")
         f_par = cf2.number_input("F∥ Tangencial / Paralela (kN)", value=0.0, help="+ Ao longo da inclinação (+X), - Sentido oposto (-X)")
         mz_in = cf3.number_input("Mz (kNm)", value=0.0)
-        st.caption("💡 *Exemplo de Vento: F⟂ positivo (+) = sucção perpendicular; F⟂ negativo (-) = sobrepressão perpendicular.*")
 
     if st.button("Salvar Condições nos Nós Selecionados", type="primary", use_container_width=True):
         if not st.session_state.sel_nos:
