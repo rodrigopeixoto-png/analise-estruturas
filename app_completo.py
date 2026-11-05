@@ -127,22 +127,21 @@ if not st.session_state.dados_nos:
     ]
 
 # -----------------------------------------------------------------------------
-# 4. VISUALIZAÇÃO GRÁFICA COM APOIOS E CARGAS VETORIAIS
+# 4. VISUALIZAÇÃO GRÁFICA COM PONTOS MÉDIOS SELECIONÁVEIS
 # -----------------------------------------------------------------------------
-st.subheader("2. Geometria Interativa (Clique sobre um Nó ou Barra)")
+st.subheader("2. Geometria Interativa (Clique sobre um Nó ou no Losango Central de uma Barra)")
 
 coords_map = {n['Nó']: (n['X'], n['Y']) for n in st.session_state.dados_nos}
 
 fig = go.Figure()
 
-# Dimensão proporcional para desenho dos símbolos de apoio
 all_x = [n['X'] for n in st.session_state.dados_nos]
 all_y = [n['Y'] for n in st.session_state.dados_nos]
 span_x = max(all_x) - min(all_x) if all_x else 10.0
 span_y = max(all_y) - min(all_y) if all_y else 2.0
 s_dim = max(span_x, span_y, 1.0) * 0.025
 
-# 4.1 Desenhar as Barras
+# 4.1 Desenhar as Linhas das Barras
 for b in st.session_state.dados_barras:
     n1, n2 = b['Nó Inic.'], b['Nó Final']
     if n1 in coords_map and n2 in coords_map:
@@ -154,118 +153,73 @@ for b in st.session_state.dados_barras:
             y=[y1, y2],
             mode='lines',
             line=dict(color='magenta' if is_sel else '#1f77b4', width=4 if is_sel else 2),
-            hoverinfo='text',
-            text=f"Barra {b['Barra']}<br>Seção: {b['Seção']}<br>Mat: {b['Material']}",
-            customdata=[b['Barra'], b['Barra']],
+            hoverinfo='skip',
             showlegend=False
         ))
 
-# 4.2 Desenhar Símbolos de Apoios e Vetores de Forças
+# 4.2 Desenhar os Pontos Médios das Barras (Permite clicar nas barras com precisão)
+x_mid, y_mid, ids_barras, hover_barras = [], [], [], []
+for b in st.session_state.dados_barras:
+    n1, n2 = b['Nó Inic.'], b['Nó Final']
+    if n1 in coords_map and n2 in coords_map:
+        x1, y1 = coords_map[n1]
+        x2, y2 = coords_map[n2]
+        x_mid.append((x1 + x2) / 2)
+        y_mid.append((y1 + y2) / 2)
+        ids_barras.append(b['Barra'])
+        hover_barras.append(f"<b>Barra {b['Barra']}</b><br>Nós: {n1} → {n2}<br>Seção: {b['Seção']}<br>Mat: {b['Material']}")
+
+cores_barras = ['magenta' if bid == st.session_state.barra_selecionada else '#4682b4' for bid in ids_barras]
+
+fig.add_trace(go.Scatter(
+    x=x_mid,
+    y=y_mid,
+    mode='markers',
+    marker=dict(size=9, symbol='diamond', color=cores_barras, line=dict(width=1, color='white')),
+    hoverinfo='text',
+    hovertext=hover_barras,
+    customdata=[f"barra_{bid}" for bid in ids_barras],
+    name='Barras (Centros)'
+))
+
+# 4.3 Símbolos de Apoios e Vetores de Forças
 for n in st.session_state.dados_nos:
     x, y = n['X'], n['Y']
     ap_x, ap_y, ap_rot = n['Apoio X'], n['Apoio Y'], n['Apoio Rot']
     fx, fy, mz = n['Fx (kN)'], n['Fy (kN)'], n['Mz (kNm)']
 
-    # SÍMBOLOS DE APOIO
     if ap_x and ap_y and ap_rot:
-        # Engaste (Bloco verde escuro)
-        fig.add_shape(
-            type="rect",
-            x0=x - 0.7 * s_dim, y0=y - 0.7 * s_dim,
-            x1=x + 0.7 * s_dim, y1=y,
-            line=dict(color="#006400", width=1.5),
-            fillcolor="rgba(0, 100, 0, 0.45)"
-        )
-        fig.add_shape(
-            type="line",
-            x0=x - 0.9 * s_dim, y0=y - 0.7 * s_dim,
-            x1=x + 0.9 * s_dim, y1=y - 0.7 * s_dim,
-            line=dict(color="#006400", width=2.5)
-        )
+        fig.add_shape(type="rect", x0=x - 0.7*s_dim, y0=y - 0.7*s_dim, x1=x + 0.7*s_dim, y1=y, line=dict(color="#006400", width=1.5), fillcolor="rgba(0, 100, 0, 0.45)")
+        fig.add_shape(type="line", x0=x - 0.9*s_dim, y0=y - 0.7*s_dim, x1=x + 0.9*s_dim, y1=y - 0.7*s_dim, line=dict(color="#006400", width=2.5))
     elif ap_x and ap_y and not ap_rot:
-        # Apoio de 2º Gênero / Pino (Triângulo com solo firme)
-        fig.add_shape(
-            type="path",
-            path=f"M {x} {y} L {x - 0.75 * s_dim} {y - 0.9 * s_dim} L {x + 0.75 * s_dim} {y - 0.9 * s_dim} Z",
-            line=dict(color="#006400", width=1.5),
-            fillcolor="rgba(0, 100, 0, 0.35)"
-        )
-        fig.add_shape(
-            type="line",
-            x0=x - 0.95 * s_dim, y0=y - 0.9 * s_dim,
-            x1=x + 0.95 * s_dim, y1=y - 0.9 * s_dim,
-            line=dict(color="#006400", width=2.5)
-        )
+        fig.add_shape(type="path", path=f"M {x} {y} L {x - 0.75*s_dim} {y - 0.9*s_dim} L {x + 0.75*s_dim} {y - 0.9*s_dim} Z", line=dict(color="#006400", width=1.5), fillcolor="rgba(0, 100, 0, 0.35)")
+        fig.add_shape(type="line", x0=x - 0.95*s_dim, y0=y - 0.9*s_dim, x1=x + 0.95*s_dim, y1=y - 0.9*s_dim, line=dict(color="#006400", width=2.5))
     elif not ap_x and ap_y:
-        # Apoio de 1º Gênero / Rolete Vertical (Triângulo com fresta de deslizamento)
-        fig.add_shape(
-            type="path",
-            path=f"M {x} {y} L {x - 0.65 * s_dim} {y - 0.75 * s_dim} L {x + 0.65 * s_dim} {y - 0.75 * s_dim} Z",
-            line=dict(color="#006400", width=1.5),
-            fillcolor="rgba(0, 100, 0, 0.25)"
-        )
-        fig.add_shape(
-            type="line",
-            x0=x - 0.85 * s_dim, y0=y - 0.95 * s_dim,
-            x1=x + 0.85 * s_dim, y1=y - 0.95 * s_dim,
-            line=dict(color="#006400", width=2)
-        )
+        fig.add_shape(type="path", path=f"M {x} {y} L {x - 0.65*s_dim} {y - 0.75*s_dim} L {x + 0.65*s_dim} {y - 0.75*s_dim} Z", line=dict(color="#006400", width=1.5), fillcolor="rgba(0, 100, 0, 0.25)")
+        fig.add_shape(type="line", x0=x - 0.85*s_dim, y0=y - 0.95*s_dim, x1=x + 0.85*s_dim, y1=y - 0.95*s_dim, line=dict(color="#006400", width=2))
     elif ap_x and not ap_y:
-        # Apoio de 1º Gênero / Rolete Horizontal
-        fig.add_shape(
-            type="path",
-            path=f"M {x} {y} L {x - 0.75 * s_dim} {y - 0.65 * s_dim} L {x - 0.75 * s_dim} {y + 0.65 * s_dim} Z",
-            line=dict(color="#006400", width=1.5),
-            fillcolor="rgba(0, 100, 0, 0.25)"
-        )
-        fig.add_shape(
-            type="line",
-            x0=x - 0.95 * s_dim, y0=y - 0.85 * s_dim,
-            x1=x - 0.95 * s_dim, y1=y + 0.85 * s_dim,
-            line=dict(color="#006400", width=2)
-        )
+        fig.add_shape(type="path", path=f"M {x} {y} L {x - 0.75*s_dim} {y - 0.65*s_dim} L {x - 0.75*s_dim} {y + 0.65*s_dim} Z", line=dict(color="#006400", width=1.5), fillcolor="rgba(0, 100, 0, 0.25)")
+        fig.add_shape(type="line", x0=x - 0.95*s_dim, y0=y - 0.85*s_dim, x1=x - 0.95*s_dim, y1=y + 0.85*s_dim, line=dict(color="#006400", width=2))
 
-    # VETOR DE FORÇA APLICADA (Seta orientada)
     if abs(fx) > 0.001 or abs(fy) > 0.001:
         f_mag = float(np.hypot(fx, fy))
-        ux = fx / f_mag
-        uy = fy / f_mag
-        
-        # Inversão pixelar: -ux afasta a cauda horizontalmente; +uy afasta a cauda no Y invertido
+        ux, uy = fx / f_mag, fy / f_mag
         fig.add_annotation(
-            x=x, y=y,
-            ax=-55 * ux,
-            ay=55 * uy,
-            xref="x", yref="y",
-            axref="pixel", ayref="pixel",
-            text=f"{f_mag:.1f} kN",
-            showarrow=True,
-            arrowhead=2,
-            arrowsize=1.6,
-            arrowwidth=2.5,
-            arrowcolor="red",
-            font=dict(color="red", size=10, family="Arial", weight="bold"),
-            bgcolor="rgba(255, 255, 255, 0.85)",
-            bordercolor="red",
-            borderwidth=1,
-            borderpad=2
+            x=x, y=y, ax=-55 * ux, ay=55 * uy, xref="x", yref="y", axref="pixel", ayref="pixel",
+            text=f"{f_mag:.1f} kN", showarrow=True, arrowhead=2, arrowsize=1.6, arrowwidth=2.5,
+            arrowcolor="red", font=dict(color="red", size=10, family="Arial", weight="bold"),
+            bgcolor="rgba(255, 255, 255, 0.85)", bordercolor="red", borderwidth=1, borderpad=2
         )
 
-    # MOMENTO FLETOR APLICADO
     if abs(mz) > 0.001:
         simb = "↻" if mz < 0 else "↺"
         fig.add_annotation(
-            x=x, y=y,
-            text=f"{simb} {abs(mz):.1f} kNm",
-            showarrow=False,
-            yshift=18,
-            font=dict(color="purple", size=10, weight="bold"),
-            bgcolor="rgba(255, 255, 255, 0.85)",
-            bordercolor="purple",
-            borderwidth=1
+            x=x, y=y, text=f"{simb} {abs(mz):.1f} kNm", showarrow=False, yshift=18,
+            font=dict(color="purple", size=10, weight="bold"), bgcolor="rgba(255, 255, 255, 0.85)",
+            bordercolor="purple", borderwidth=1
         )
 
-# 4.3 Desenhar os Nós
+# 4.4 Desenhar os Nós
 x_pts, y_pts, nos_ids, txt_hover = [], [], [], []
 for n in st.session_state.dados_nos:
     x_pts.append(n['X'])
@@ -276,7 +230,7 @@ for n in st.session_state.dados_nos:
     if n['Apoio Y']: info_ap.append("Dy")
     if n['Apoio Rot']: info_ap.append("Rz")
     txt_ap = f"Apoios: [{', '.join(info_ap)}]" if info_ap else "Livre"
-    txt_hover.append(f"Nó {n['Nó']}<br>({n['X']}, {n['Y']})<br>{txt_ap}<br>Fx: {n['Fx (kN)']} kN, Fy: {n['Fy (kN)']} kN")
+    txt_hover.append(f"<b>Nó {n['Nó']}</b><br>({n['X']}, {n['Y']})<br>{txt_ap}<br>Fx: {n['Fx (kN)']} kN, Fy: {n['Fy (kN)']} kN")
 
 cores_nos = ['yellow' if nid == st.session_state.no_selecionado else 'red' for nid in nos_ids]
 
@@ -290,7 +244,7 @@ fig.add_trace(go.Scatter(
     textfont=dict(size=9, color='darkred'),
     hoverinfo='text',
     hovertext=txt_hover,
-    customdata=nos_ids,
+    customdata=[f"no_{nid}" for nid in nos_ids],
     name='Nós'
 ))
 
@@ -305,14 +259,21 @@ fig.update_layout(
 
 event_click = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="main_plot")
 
+# Processar o ponto clicado garantindo distinção nó vs barra
 if event_click and "selection" in event_click and event_click["selection"]["points"]:
     ponto = event_click["selection"]["points"][0]
     if "customdata" in ponto:
-        cdata = ponto["customdata"]
-        if any(n['Nó'] == cdata for n in st.session_state.dados_nos):
-            st.session_state.no_selecionado = int(cdata)
-        elif any(b['Barra'] == cdata for b in st.session_state.dados_barras):
-            st.session_state.barra_selecionada = int(cdata)
+        cdata = str(ponto["customdata"])
+        if cdata.startswith("no_"):
+            novo_no = int(cdata.replace("no_", ""))
+            if novo_no != st.session_state.no_selecionado:
+                st.session_state.no_selecionado = novo_no
+                st.rerun()
+        elif cdata.startswith("barra_"):
+            nova_barra = int(cdata.replace("barra_", ""))
+            if nova_barra != st.session_state.barra_selecionada:
+                st.session_state.barra_selecionada = nova_barra
+                st.rerun()
 
 # -----------------------------------------------------------------------------
 # 5. PAINEL DE ATRIBUIÇÃO
@@ -352,7 +313,7 @@ with col_p1:
 with col_p2:
     st.markdown("#### 📏 Configurar Barra")
     sel_b = st.selectbox(
-        "Selecione a Barra (ou clique na linha roxa no desenho):",
+        "Selecione a Barra (ou clique no losango central no desenho):",
         options=[b['Barra'] for b in st.session_state.dados_barras],
         index=[b['Barra'] for b in st.session_state.dados_barras].index(st.session_state.barra_selecionada) if st.session_state.barra_selecionada in [b['Barra'] for b in st.session_state.dados_barras] else 0
     )
