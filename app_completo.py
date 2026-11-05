@@ -10,12 +10,13 @@ st.set_page_config(page_title="Ftool Engine - Visual", layout="wide")
 
 st.title("🏗️ Motor Ftool: Importação DXF e Cálculo")
 
-# --- Módulo de Importação DXF ---
 st.subheader("1. Importar Geometria (DXF)")
 arquivo_dxf = st.file_uploader("Selecione o arquivo .dxf gerado pelo seu CAD", type=['dxf'])
 
 dados_nos_iniciais = []
 dados_barras_iniciais = []
+nos_lista = []
+coords_nos = {}
 
 if arquivo_dxf is not None:
     try:
@@ -27,16 +28,23 @@ if arquivo_dxf is not None:
         os.remove(tmp_path)
         msp = doc.modelspace()
         
-        linhas = msp.query('LINE')
         nos_set = set()
         barras_dxf = []
         
-        for linha in linhas:
+        # Lê elementos do tipo LINE
+        for linha in msp.query('LINE'):
             start = (round(linha.dxf.start.x, 3), round(linha.dxf.start.y, 3))
             end = (round(linha.dxf.end.x, 3), round(linha.dxf.end.y, 3))
-            nos_set.add(start)
-            nos_set.add(end)
+            nos_set.update([start, end])
             barras_dxf.append((start, end))
+            
+        # Lê elementos do tipo LWPOLYLINE (linhas contínuas)
+        for polyline in msp.query('LWPOLYLINE'):
+            points = [(round(p[0], 3), round(p[1], 3)) for p in polyline.get_points(format='xy')]
+            for i in range(len(points) - 1):
+                start, end = points[i], points[i+1]
+                nos_set.update([start, end])
+                barras_dxf.append((start, end))
             
         nos_lista = sorted(list(nos_set), key=lambda x: (x[0], x[1]))
         no_map = {no: i+1 for i, no in enumerate(nos_lista)}
@@ -48,40 +56,19 @@ if arquivo_dxf is not None:
             dados_barras_iniciais.append({"Barra": i+1, "Nó Inic.": no_map[barra[0]], "Nó Final": no_map[barra[1]], "E (GPa)": 200.0, "A (cm²)": 50.0, "I (cm⁴)": 10000.0})
             
         st.success(f"DXF lido com sucesso! Encontrados {len(nos_lista)} nós e {len(barras_dxf)} barras.")
+        
+        coords_nos = {no_map[no]: no for no in nos_lista}
     except Exception as e:
         st.error(f"Erro ao ler DXF: {e}")
 
-if not dados_nos_iniciais:
-    dados_nos_iniciais = [
-        {"Nó": 1, "X": 0.0, "Y": 0.0, "Apoio X": True, "Apoio Y": True, "Apoio Rot": True, "Fx (kN)": 0.0, "Fy (kN)": 0.0, "Mz (kNm)": 0.0},
-        {"Nó": 2, "X": 0.0, "Y": 4.0, "Apoio X": False, "Apoio Y": False, "Apoio Rot": False, "Fx (kN)": 20.0, "Fy (kN)": 0.0, "Mz (kNm)": 0.0},
-        {"Nó": 3, "X": 5.0, "Y": 4.0, "Apoio X": False, "Apoio Y": False, "Apoio Rot": False, "Fx (kN)": 0.0, "Fy (kN)": -15.0, "Mz (kNm)": 0.0},
-        {"Nó": 4, "X": 5.0, "Y": 0.0, "Apoio X": True, "Apoio Y": True, "Apoio Rot": True, "Fx (kN)": 0.0, "Fy (kN)": 0.0, "Mz (kNm)": 0.0},
-    ]
-    dados_barras_iniciais = [
-        {"Barra": 1, "Nó Inic.": 1, "Nó Final": 2, "E (GPa)": 200.0, "A (cm²)": 50.0, "I (cm⁴)": 10000.0},
-        {"Barra": 2, "Nó Inic.": 2, "Nó Final": 3, "E (GPa)": 200.0, "A (cm²)": 50.0, "I (cm⁴)": 20000.0},
-        {"Barra": 3, "Nó Inic.": 3, "Nó Final": 4, "E (GPa)": 200.0, "A (cm²)": 50.0, "I (cm⁴)": 10000.0},
-    ]
-
-col1, col2 = st.columns([1, 1])
-
-with col1:
-    st.subheader("2. Edição de Nós e Barras")
-    st.write("Defina os apoios e cargas aqui. Verifique os IDs na imagem ao lado.")
-    tabela_nos = st.data_editor(pd.DataFrame(dados_nos_iniciais), num_rows="dynamic", use_container_width=True)
-    tabela_barras = st.data_editor(pd.DataFrame(dados_barras_iniciais), num_rows="dynamic", use_container_width=True)
-
-with col2:
-    st.subheader("3. Pré-visualização da Estrutura")
-    mostrar_ids = st.checkbox("Mostrar IDs dos Nós (Desligue para estruturas muito densas)", value=False)
+# Pré-visualização em largura total
+if dados_nos_iniciais:
+    st.subheader("Pré-visualização da Estrutura")
+    mostrar_ids = st.checkbox("Mostrar IDs dos Nós", value=False)
     
-    # Aumentado o figsize para dar mais espaço à estrutura
-    fig_preview, ax_preview = plt.subplots(figsize=(10, 6)) 
+    fig_preview, ax_preview = plt.subplots(figsize=(16, 4)) 
     
-    coords_nos = {row['Nó']: (row['X'], row['Y']) for _, row in tabela_nos.iterrows()}
-    
-    for _, row in tabela_barras.iterrows():
+    for row in dados_barras_iniciais:
         n1, n2 = row['Nó Inic.'], row['Nó Final']
         if n1 in coords_nos and n2 in coords_nos:
             x1, y1 = coords_nos[n1]
@@ -99,7 +86,17 @@ with col2:
     ax_preview.set_ylabel("Y (m)")
     st.pyplot(fig_preview)
 
-# --- Motor Matemático ---
+st.divider()
+
+col1, col2 = st.columns([1, 1])
+with col1:
+    st.subheader("2. Edição de Nós")
+    tabela_nos = st.data_editor(pd.DataFrame(dados_nos_iniciais), num_rows="dynamic", use_container_width=True)
+with col2:
+    st.subheader("3. Edição de Barras")
+    tabela_barras = st.data_editor(pd.DataFrame(dados_barras_iniciais), num_rows="dynamic", use_container_width=True)
+
+# Motor Matemático
 def matriz_rigidez_local(E, A, I, L):
     k = np.zeros((6, 6))
     EA_L = (E * A) / L; EI_L = (E * I) / L
@@ -119,8 +116,7 @@ def matriz_transformacao(dx, dy, L):
     return T
 
 st.divider()
-
-if st.button("▶️ Calcular Estrutura e Ver Resultados", use_container_width=True, type="primary"):
+if st.button("▶️ Calcular Estrutura", use_container_width=True, type="primary") and not tabela_nos.empty:
     num_nos = len(tabela_nos)
     num_gdl = num_nos * 3
     K_global = np.zeros((num_gdl, num_gdl))
@@ -173,51 +169,46 @@ if st.button("▶️ Calcular Estrutura e Ver Resultados", use_container_width=T
             
         Reacoes = K_global @ U_global - F_global
         
-        col_res1, col_res2 = st.columns([1, 1])
-        with col_res1:
-            st.success("✅ Estrutura calculada com sucesso!")
-            st.subheader("4. Vista Deformada")
-            fig_def, ax_def = plt.subplots(figsize=(10, 6))
-            escala = 30
+        st.success("✅ Estrutura calculada com sucesso!")
+        
+        st.subheader("Deformada")
+        fig_def, ax_def = plt.subplots(figsize=(16, 4))
+        escala = 30
+        
+        for i, row in tabela_barras.iterrows():
+            n1, n2 = int(row['Nó Inic.']), int(row['Nó Final'])
+            x1, y1 = tabela_nos[tabela_nos['Nó']==n1][['X', 'Y']].values[0]
+            x2, y2 = tabela_nos[tabela_nos['Nó']==n2][['X', 'Y']].values[0]
             
-            for i, row in tabela_barras.iterrows():
-                n1, n2 = int(row['Nó Inic.']), int(row['Nó Final'])
-                x1, y1 = tabela_nos[tabela_nos['Nó']==n1][['X', 'Y']].values[0]
-                x2, y2 = tabela_nos[tabela_nos['Nó']==n2][['X', 'Y']].values[0]
-                
-                idx1 = no_to_idx[n1] * 3
-                idx2 = no_to_idx[n2] * 3
-                
-                x1_def = x1 + U_global[idx1] * escala
-                y1_def = y1 + U_global[idx1+1] * escala
-                x2_def = x2 + U_global[idx2] * escala
-                y2_def = y2 + U_global[idx2+1] * escala
-                
-                ax_def.plot([x1, x2], [y1, y2], color='gray', linestyle='--', linewidth=1, label="Original" if i==0 else "")
-                ax_def.plot([x1_def, x2_def], [y1_def, y2_def], marker='o', markersize=3, color='red', linewidth=1.5, label="Deformada" if i==0 else "")
+            idx1 = no_to_idx[n1] * 3
+            idx2 = no_to_idx[n2] * 3
             
-            ax_def.set_aspect('equal')
-            ax_def.grid(True, linestyle=':', alpha=0.6)
-            handles, labels = ax_def.get_legend_handles_labels()
-            by_label = dict(zip(labels, handles))
-            ax_def.legend(by_label.values(), by_label.keys())
-            st.pyplot(fig_def)
+            x1_def = x1 + U_global[idx1] * escala
+            y1_def = y1 + U_global[idx1+1] * escala
+            x2_def = x2 + U_global[idx2] * escala
+            y2_def = y2 + U_global[idx2+1] * escala
+            
+            ax_def.plot([x1, x2], [y1, y2], color='gray', linestyle='--', linewidth=1)
+            ax_def.plot([x1_def, x2_def], [y1_def, y2_def], marker='o', markersize=3, color='red', linewidth=1.5)
+        
+        ax_def.set_aspect('equal')
+        ax_def.grid(True, linestyle=':', alpha=0.6)
+        st.pyplot(fig_def)
 
-        with col_res2:
-            st.subheader("5. Reações nos Apoios")
-            res_reacoes = []
-            for i, row in tabela_nos.iterrows():
-                no_id = int(row['Nó'])
-                idx = no_to_idx[no_id] * 3
-                if row['Apoio X'] or row['Apoio Y'] or row['Apoio Rot']:
-                    res_reacoes.append({
-                        "Nó": no_id,
-                        "Rx (kN)": round(Reacoes[idx] / 1000, 2),
-                        "Ry (kN)": round(Reacoes[idx+1] / 1000, 2),
-                        "R_Momento (kNm)": round(Reacoes[idx+2] / 1000, 2)
-                    })
-            if res_reacoes:
-                st.dataframe(pd.DataFrame(res_reacoes), use_container_width=True)
+        st.subheader("Reações nos Apoios")
+        res_reacoes = []
+        for i, row in tabela_nos.iterrows():
+            no_id = int(row['Nó'])
+            idx = no_to_idx[no_id] * 3
+            if row['Apoio X'] or row['Apoio Y'] or row['Apoio Rot']:
+                res_reacoes.append({
+                    "Nó": no_id,
+                    "Rx (kN)": round(Reacoes[idx] / 1000, 2),
+                    "Ry (kN)": round(Reacoes[idx+1] / 1000, 2),
+                    "R_Momento (kNm)": round(Reacoes[idx+2] / 1000, 2)
+                })
+        if res_reacoes:
+            st.dataframe(pd.DataFrame(res_reacoes), use_container_width=True)
 
     except np.linalg.LinAlgError:
         st.error("Erro na matriz: A estrutura é instável (hipostática). Verifique os apoios!")
