@@ -6,8 +6,8 @@ import ezdxf
 import tempfile
 import os
 
-st.set_page_config(page_title="Ftool Web - Multi-Seleção e Perfis", layout="wide")
-st.title("🏗️ Ftool Web: Multi-Seleção, Segmentação DXF e Perfis C")
+st.set_page_config(page_title="Ftool Web - Zoom por Scroll", layout="wide")
+st.title("🏗️ Ftool Web: Multi-Seleção, Segmentação DXF e Zoom por Scroll")
 
 # -----------------------------------------------------------------------------
 # 1. CATÁLOGO DE MATERIAIS E SEÇÕES (Laminados e Dobrados C)
@@ -55,7 +55,6 @@ LISTA_MATERIAIS = list(MATERIAIS.keys())
 # 2. ALGORITMO DE SEGMENTAÇÃO AUTOMÁTICA DE LINHAS
 # -----------------------------------------------------------------------------
 def segmentar_linhas_com_nos(linhas_brutas, nos_unicos, tol=0.005):
-    """Subdivide linhas contínuas em barras individuais onde nós intermediários se encontram."""
     barras_finais = []
     for p1, p2 in linhas_brutas:
         x1, y1 = p1
@@ -186,15 +185,15 @@ if not st.session_state.dados_nos:
     ]
 
 # -----------------------------------------------------------------------------
-# 5. VISUALIZAÇÃO GRÁFICA INTERATIVA COM SELEÇÃO POR RETÂNGULO
+# 5. VISUALIZAÇÃO GRÁFICA INTERATIVA (ZOOM POR SCROLL ATIVADO)
 # -----------------------------------------------------------------------------
 st.subheader("2. Geometria Interativa")
 
 col_ferramentas1, col_ferramentas2 = st.columns([1, 1])
 with col_ferramentas1:
     modo_mouse = st.radio(
-        "Modo de Interação com o Mouse:",
-        ["📦 Seleção por Retângulo (Arraste uma caixa sobre vários nós/barras)", "🖐️ Mover e Zoom (Pan)"],
+        "Modo de Interação com o Botão Esquerdo:",
+        ["🖐️ Mover e Enquadrar (Pan)", "📦 Seleção por Caixa (Retângulo)"],
         horizontal=True
     )
 with col_ferramentas2:
@@ -210,7 +209,7 @@ span_x = max(all_x) - min(all_x) if all_x else 10.0
 span_y = max(all_y) - min(all_y) if all_y else 2.0
 s_dim = max(span_x, span_y, 1.0) * 0.025
 
-# 5.1 Linhas das Barras (Agrupadas com None para renderização instantânea)
+# 5.1 Linhas das Barras
 x_norm, y_norm = [], []
 x_sel, y_sel = [], []
 
@@ -231,7 +230,7 @@ if x_norm:
 if x_sel:
     fig.add_trace(go.Scatter(x=x_sel, y=y_sel, mode='lines', line=dict(color='magenta', width=4), hoverinfo='skip', showlegend=False))
 
-# 5.2 Marcadores Centrais de Barras (Losangos Clicáveis / Selecionáveis por Caixa)
+# 5.2 Marcadores Centrais de Barras (Losangos)
 x_mid, y_mid, ids_barras, hover_barras = [], [], [], []
 for b in st.session_state.dados_barras:
     n1, n2 = b['Nó Inic.'], b['Nó Final']
@@ -324,7 +323,7 @@ fig.add_trace(go.Scatter(
     name='Nós'
 ))
 
-drag_val = "select" if "Retângulo" in modo_mouse else "pan"
+drag_val = "pan" if "Mover" in modo_mouse else "select"
 
 fig.update_layout(
     height=450,
@@ -332,12 +331,26 @@ fig.update_layout(
     xaxis=dict(scaleanchor="y", scaleratio=1, showgrid=True, zeroline=False),
     yaxis=dict(showgrid=True, zeroline=False),
     dragmode=drag_val,
-    clickmode="event+select"
+    clickmode="event+select",
+    uirevision="persist_zoom"  # Mantém o zoom ao interagir/recarregar
 )
 
-event_click = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="main_plot")
+# Renderização com zoom por scroll do mouse ativado
+config_grafico = {
+    'scrollZoom': True,
+    'displaylogo': False,
+    'modeBarButtonsToAdd': ['drawline', 'eraseshape']
+}
 
-# Processamento de cliques múltiplos (caixa de seleção ou cliques individuais)
+event_click = st.plotly_chart(
+    fig, 
+    use_container_width=True, 
+    on_select="rerun", 
+    key="main_plot", 
+    config=config_grafico
+)
+
+# Processamento de seleção
 if event_click and "selection" in event_click and event_click["selection"]["points"]:
     novos_nos = []
     novas_barras = []
@@ -360,7 +373,7 @@ if event_click and "selection" in event_click and event_click["selection"]["poin
         st.rerun()
 
 # -----------------------------------------------------------------------------
-# 6. PAINEL DE ATRIBUIÇÃO EM MASSA (LOTE)
+# 6. PAINEL DE ATRIBUIÇÃO EM MASSA
 # -----------------------------------------------------------------------------
 st.subheader("3. Painel de Atribuição em Lote")
 col_p1, col_p2 = st.columns(2)
@@ -368,11 +381,10 @@ col_p1, col_p2 = st.columns(2)
 with col_p1:
     st.markdown("#### 📍 Configurar Nós Selecionados")
     todos_nos_ids = [n['Nó'] for n in st.session_state.dados_nos]
-    
     nos_selecionados_validos = [nid for nid in st.session_state.sel_nos if nid in todos_nos_ids]
     
     sel_nos_input = st.multiselect(
-        "Nós Selecionados (adicione/remova da lista ou selecione no gráfico):",
+        "Nós Selecionados (ou arraste um retângulo no gráfico):",
         options=todos_nos_ids,
         default=nos_selecionados_validos
     )
@@ -419,11 +431,10 @@ with col_p1:
 with col_p2:
     st.markdown("#### 📏 Configurar Barras Selecionadas")
     todas_barras_ids = [b['Barra'] for b in st.session_state.dados_barras]
-    
     barras_selecionadas_validas = [bid for bid in st.session_state.sel_barras if bid in todas_barras_ids]
     
     sel_barras_input = st.multiselect(
-        "Barras Selecionadas (adicione/remova da lista ou selecione no gráfico):",
+        "Barras Selecionadas (ou arraste um retângulo no gráfico):",
         options=todas_barras_ids,
         default=barras_selecionadas_validas
     )
@@ -590,7 +601,13 @@ if st.button("▶️ Calcular Esforços e Gerar Diagramas", type="primary", use_
                     text=f"Valor Nó 1: {v1:.1f}<br>Valor Nó 2: {v2:.1f}",
                     showlegend=False
                 ))
-            fig_d.update_layout(height=400, margin=dict(l=20,r=20,t=20,b=20), xaxis=dict(scaleanchor="y", scaleratio=1))
+            fig_d.update_layout(
+                height=400, 
+                margin=dict(l=20,r=20,t=20,b=20), 
+                xaxis=dict(scaleanchor="y", scaleratio=1),
+                dragmode="pan",
+                uirevision="diagramas"
+            )
             return fig_d
 
         with t1:
@@ -605,15 +622,21 @@ if st.button("▶️ Calcular Esforços e Gerar Diagramas", type="primary", use_
                 y2_d = info['y2'] + U_global[idx2[1]] * esc_def
                 fig_def.add_trace(go.Scatter(x=[info['x1'], info['x2']], y=[info['y1'], info['y2']], mode='lines', line=dict(color='gray', dash='dash', width=1), showlegend=False))
                 fig_def.add_trace(go.Scatter(x=[x1_d, x2_d], y=[y1_d, y2_d], mode='lines+markers', line=dict(color='red', width=2), showlegend=False))
-            fig_def.update_layout(height=400, margin=dict(l=20,r=20,t=20,b=20), xaxis=dict(scaleanchor="y", scaleratio=1))
-            st.plotly_chart(fig_def, use_container_width=True)
+            fig_def.update_layout(
+                height=400, 
+                margin=dict(l=20,r=20,t=20,b=20), 
+                xaxis=dict(scaleanchor="y", scaleratio=1),
+                dragmode="pan",
+                uirevision="deformada"
+            )
+            st.plotly_chart(fig_def, use_container_width=True, config={'scrollZoom': True})
 
         with t2:
-            st.plotly_chart(plot_diagrama_plotly(esforcos, 'N'), use_container_width=True)
+            st.plotly_chart(plot_diagrama_plotly(esforcos, 'N'), use_container_width=True, config={'scrollZoom': True})
         with t3:
-            st.plotly_chart(plot_diagrama_plotly(esforcos, 'V'), use_container_width=True)
+            st.plotly_chart(plot_diagrama_plotly(esforcos, 'V'), use_container_width=True, config={'scrollZoom': True})
         with t4:
-            st.plotly_chart(plot_diagrama_plotly(esforcos, 'M'), use_container_width=True)
+            st.plotly_chart(plot_diagrama_plotly(esforcos, 'M'), use_container_width=True, config={'scrollZoom': True})
 
         with t5:
             res = []
