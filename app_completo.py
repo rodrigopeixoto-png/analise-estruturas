@@ -6,8 +6,8 @@ import ezdxf
 import tempfile
 import os
 
-st.set_page_config(page_title="Ftool Web - Seleção por Caixa Geométrica", layout="wide")
-st.title("🏗️ Ftool Web: Multi-Seleção por Caixa, Segmentação DXF e Perfis C")
+st.set_page_config(page_title="Ftool Web - Cargas Locais e Globais", layout="wide")
+st.title("🏗️ Ftool Web: Cargas Locais/Globais, Multi-Seleção e Perfis C")
 
 # -----------------------------------------------------------------------------
 # 1. CATÁLOGO DE MATERIAIS E SEÇÕES (Laminados e Dobrados C)
@@ -52,7 +52,7 @@ LISTA_SECOES = list(SECOES.keys())
 LISTA_MATERIAIS = list(MATERIAIS.keys())
 
 # -----------------------------------------------------------------------------
-# 2. FUNÇÕES GEOMÉTRICAS: SEGMENTAÇÃO DXF E INTERSECÇÃO COM CAIXA
+# 2. FUNÇÕES GEOMÉTRICAS: SEGMENTAÇÃO DXF, CAIXA E ÂNGULOS LOCAIS
 # -----------------------------------------------------------------------------
 def segmentar_linhas_com_nos(linhas_brutas, nos_unicos, tol=0.005):
     """Subdivide linhas contínuas em barras individuais onde nós intermediários se encontram."""
@@ -95,17 +95,13 @@ def segmentar_linhas_com_nos(linhas_brutas, nos_unicos, tol=0.005):
 
 def linha_intercepta_caixa(x1, y1, x2, y2, xmin, xmax, ymin, ymax):
     """Verifica se um segmento de reta passa por dentro ou toca uma caixa delimitadora."""
-    # 1. Extremidades dentro da caixa
     if (xmin <= x1 <= xmax and ymin <= y1 <= ymax) or (xmin <= x2 <= xmax and ymin <= y2 <= ymax):
         return True
-    # 2. Ponto médio dentro da caixa
     xm, ym = (x1 + x2) / 2, (y1 + y2) / 2
     if xmin <= xm <= xmax and ymin <= ym <= ymax:
         return True
-    # 3. Teste rápido de caixa envolvente (bounding box)
     if max(x1, x2) < xmin or min(x1, x2) > xmax or max(y1, y2) < ymin or min(y1, y2) > ymax:
         return False
-    # 4. Intersecção de segmentos com as 4 bordas da caixa
     def ccw(A, B, C):
         return (C[1]-A[1]) * (B[0]-A[0]) > (B[1]-A[1]) * (C[0]-A[0])
     def cruzam(A, B, C, D):
@@ -118,6 +114,37 @@ def linha_intercepta_caixa(x1, y1, x2, y2, xmin, xmax, ymin, ymax):
         if cruzam(A, B, C, D):
             return True
     return False
+
+def calcular_angulos_locais_nos(sel_nos, dados_barras, coords_map):
+    """Determina a inclinação local média da barra/banzo conectada a cada nó selecionado."""
+    angulos = {}
+    for nid in sel_nos:
+        ang_candidatos = []
+        for b in dados_barras:
+            n1, n2 = b['Nó Inic.'], b['Nó Final']
+            if nid in (n1, n2):
+                outro = n2 if n1 == nid else n1
+                if outro in sel_nos and n1 in coords_map and n2 in coords_map:
+                    xa, ya = coords_map[min(n1, n2, key=lambda k: coords_map[k][0])]
+                    xb, yb = coords_map[max(n1, n2, key=lambda k: coords_map[k][0])]
+                    dx, dy = xb - xa, yb - ya
+                    if np.hypot(dx, dy) > 1e-4:
+                        ang_candidatos.append(np.arctan2(dy, dx))
+        if not ang_candidatos:
+            todas_conectadas = []
+            for b in dados_barras:
+                n1, n2 = b['Nó Inic.'], b['Nó Final']
+                if nid in (n1, n2) and n1 in coords_map and n2 in coords_map:
+                    xa, ya = coords_map[min(n1, n2, key=lambda k: coords_map[k][0])]
+                    xb, yb = coords_map[max(n1, n2, key=lambda k: coords_map[k][0])]
+                    dx, dy = xb - xa, yb - ya
+                    if np.hypot(dx, dy) > 1e-4:
+                        todas_conectadas.append(np.arctan2(dy, dx))
+            if todas_conectadas:
+                todas_conectadas.sort(key=lambda a: abs(a))
+                ang_candidatos.append(todas_conectadas[0])
+        angulos[nid] = float(np.mean(ang_candidatos)) if ang_candidatos else 0.0
+    return angulos
 
 # -----------------------------------------------------------------------------
 # 3. ESTADO DA SESSÃO
@@ -215,11 +242,11 @@ if not st.session_state.dados_nos:
     ]
 
 # -----------------------------------------------------------------------------
-# 5. CONTROLES DE INTERAÇÃO
+# 5. CONTROLES DE INTERAÇÃO E EXIBIÇÃO
 # -----------------------------------------------------------------------------
 st.subheader("2. Geometria Interativa")
 
-col_ferramentas1, col_ferramentas2, col_ferramentas3 = st.columns([1.1, 1.1, 0.8])
+col_ferramentas1, col_ferramentas2, col_ferramentas3 = st.columns([1.1, 1.1, 0.9])
 with col_ferramentas1:
     modo_mouse = st.radio(
         "Ação ao Arrastar o Mouse:",
@@ -239,6 +266,7 @@ with col_ferramentas3:
         horizontal=False
     )
     mostrar_ids = st.checkbox("Mostrar Rótulos dos Nós", value=True)
+    mostrar_valores_cargas = st.checkbox("Mostrar Valores nas Cargas", value=True)
 
 # -----------------------------------------------------------------------------
 # 6. MONTAGEM DO GRÁFICO PLOTLY
@@ -321,11 +349,15 @@ for n in st.session_state.dados_nos:
     if abs(fx) > 0.001 or abs(fy) > 0.001:
         f_mag = float(np.hypot(fx, fy))
         ux, uy = fx / f_mag, fy / f_mag
+        texto_seta = f"{f_mag:.1f} kN" if mostrar_valores_cargas else ""
         fig.add_annotation(
-            x=x, y=y, ax=-55 * ux, ay=55 * uy, xref="x", yref="y", axref="pixel", ayref="pixel",
-            text=f"{f_mag:.1f} kN", showarrow=True, arrowhead=2, arrowsize=1.6, arrowwidth=2.5,
-            arrowcolor="red", font=dict(color="red", size=10, family="Arial", weight="bold"),
-            bgcolor="rgba(255, 255, 255, 0.85)", bordercolor="red", borderwidth=1, borderpad=2
+            x=x, y=y, ax=-50 * ux, ay=50 * uy, xref="x", yref="y", axref="pixel", ayref="pixel",
+            text=texto_seta, showarrow=True, arrowhead=2, arrowsize=1.6, arrowwidth=2.5,
+            arrowcolor="red", font=dict(color="red", size=9, family="Arial", weight="bold"),
+            bgcolor="rgba(255, 255, 255, 0.85)" if texto_seta else None,
+            bordercolor="red" if texto_seta else None,
+            borderwidth=1 if texto_seta else 0,
+            borderpad=1
         )
 
     if abs(mz) > 0.001:
@@ -347,7 +379,10 @@ for n in st.session_state.dados_nos:
     if n['Apoio Y']: info_ap.append("Dy")
     if n['Apoio Rot']: info_ap.append("Rz")
     txt_ap = f"Apoios: [{', '.join(info_ap)}]" if info_ap else "Livre"
-    txt_hover.append(f"<b>Nó {n['Nó']}</b><br>({n['X']}, {n['Y']})<br>{txt_ap}<br>Fx: {n['Fx (kN)']} kN, Fy: {n['Fy (kN)']} kN")
+    
+    f_res = np.hypot(n['Fx (kN)'], n['Fy (kN)'])
+    txt_cargas = f"Carga: {f_res:.2f} kN (Fx: {n['Fx (kN)']:.2f}, Fy: {n['Fy (kN)']:.2f})" if f_res > 0.001 else "Sem carga"
+    txt_hover.append(f"<b>Nó {n['Nó']}</b><br>Coord: ({n['X']:.3f}, {n['Y']:.3f})<br>{txt_ap}<br>{txt_cargas}")
 
 cores_nos = ['yellow' if nid in st.session_state.sel_nos else 'red' for nid in nos_ids]
 tamanhos_nos = [12 if nid in st.session_state.sel_nos else 8 for nid in nos_ids]
@@ -393,7 +428,7 @@ event_chart = st.plotly_chart(
 )
 
 # -----------------------------------------------------------------------------
-# 7. MOTOR DE PROCESSAMENTO DA SELEÇÃO (GEOMETRIA REAL)
+# 7. PROCESSAMENTO GEOMÉTRICO DA SELEÇÃO
 # -----------------------------------------------------------------------------
 if event_chart and "selection" in event_chart:
     sel = event_chart["selection"]
@@ -401,16 +436,12 @@ if event_chart and "selection" in event_chart:
     pts = sel.get("points", [])
 
     if boxes or pts:
-        # Assinatura única para evitar loops de rerun
         sig = f"box:{boxes}|pts:{[p.get('customdata') for p in pts if 'customdata' in p]}"
         
         if sig != st.session_state.last_processed_sig:
             st.session_state.last_processed_sig = sig
-            
-            box_nos = []
-            box_barras = []
+            box_nos, box_barras = [], []
 
-            # 1. PROCESSAR SELEÇÃO POR CAIXA (Cálculo Geométrico Exato)
             if boxes:
                 for b in boxes:
                     xb = b.get("x", [])
@@ -433,7 +464,6 @@ if event_chart and "selection" in event_chart:
                                     if linha_intercepta_caixa(x1, y1, x2, y2, xmin, xmax, ymin, ymax):
                                         box_barras.append(bar['Barra'])
 
-            # 2. PROCESSAR CLIQUE DIRETO EM ELEMENTO
             elif pts:
                 for p in pts:
                     cdata = str(p.get("customdata", ""))
@@ -442,9 +472,7 @@ if event_chart and "selection" in event_chart:
                     elif cdata.startswith("barra_"):
                         box_barras.append(int(cdata.replace("barra_", "")))
 
-            # 3. ATUALIZAÇÃO DO ESTADO
             if "Acumulativo" in modo_selecao:
-                # Clique único direto faz alternância (toggle)
                 if not boxes and len(pts) == 1:
                     if box_barras:
                         bid = box_barras[0]
@@ -459,13 +487,11 @@ if event_chart and "selection" in event_chart:
                         else:
                             st.session_state.sel_nos.append(nid)
                 else:
-                    # Caixa acumula tudo o que estiver dentro
                     if box_barras:
                         st.session_state.sel_barras = sorted(list(set(st.session_state.sel_barras).union(box_barras)))
                     if box_nos:
                         st.session_state.sel_nos = sorted(list(set(st.session_state.sel_nos).union(box_nos)))
             else:
-                # Modo substituir
                 if alvo_caixa in ["Ambos (Nós e Barras)", "Apenas Barras"]:
                     st.session_state.sel_barras = sorted(list(set(box_barras)))
                 if alvo_caixa in ["Ambos (Nós e Barras)", "Apenas Nós"]:
@@ -474,7 +500,7 @@ if event_chart and "selection" in event_chart:
             st.rerun()
 
 # -----------------------------------------------------------------------------
-# 8. PAINEL DE ATRIBUIÇÃO EM LOTE
+# 8. PAINEL DE ATRIBUIÇÃO EM LOTE: LOCAL VS GLOBAL
 # -----------------------------------------------------------------------------
 st.subheader("3. Painel de Atribuição em Lote")
 col_p1, col_p2 = st.columns(2)
@@ -485,7 +511,7 @@ with col_p1:
     nos_selecionados_validos = [nid for nid in st.session_state.sel_nos if nid in todos_nos_ids]
 
     sel_nos_input = st.multiselect(
-        "Nós Selecionados (ou arraste uma caixa no desenho acima):",
+        "Nós Selecionados (ou arraste uma caixa no desenho):",
         options=todos_nos_ids,
         default=nos_selecionados_validos
     )
@@ -506,15 +532,40 @@ with col_p1:
 
     st.caption(f"**{len(st.session_state.sel_nos)} nó(s) selecionado(s)**")
 
+    st.markdown("**Apoios / Condições de Contorno:**")
     c1, c2, c3 = st.columns(3)
     ap_x = c1.checkbox("Fixar X (Dx)", value=False)
     ap_y = c2.checkbox("Fixar Y (Dy)", value=False)
     ap_rot = c3.checkbox("Fixar Rotação (Rz)", value=False)
 
-    cf1, cf2, cf3 = st.columns(3)
-    fx = cf1.number_input("Fx (kN)", value=0.0)
-    fy = cf2.number_input("Fy (kN)", value=0.0)
-    mz = cf3.number_input("Mz (kNm)", value=0.0)
+    st.markdown("**Cargas nos Nós:**")
+    sistema_carga = st.radio(
+        "Sistema de Direção das Cargas:",
+        ["🌐 Global (Horizontal X / Vertical Y)", "📐 Local (Perpendicular ⟂ / Paralela ∥ ao Banzo)"],
+        horizontal=False
+    )
+
+    angulos_locais_dict = calcular_angulos_locais_nos(st.session_state.sel_nos, st.session_state.dados_barras, coords_map)
+    ang_medio_deg = float(np.degrees(np.mean(list(angulos_locais_dict.values())))) if angulos_locais_dict else 0.0
+
+    if "Global" in sistema_carga:
+        cf1, cf2, cf3 = st.columns(3)
+        fx_in = cf1.number_input("Fx Global (kN)", value=0.0, help="+ Direita, - Esquerda")
+        fy_in = cf2.number_input("Fy Global (kN)", value=0.0, help="+ Cima, - Baixo (Gravidade)")
+        mz_in = cf3.number_input("Mz (kNm)", value=0.0)
+    else:
+        st.info(f"📐 Inclinação detectada para os nós selecionados: **{ang_medio_deg:.2f}°**")
+        modo_ang = st.radio("Definição da Inclinação Local:", ["Automático (detectado pelo alinhamento das barras)", "Manual (digitar ângulo)"], horizontal=True)
+        if "Manual" in modo_ang:
+            ang_ref_deg = st.number_input("Ângulo de Referência (°):", value=round(ang_medio_deg, 2))
+        else:
+            ang_ref_deg = None
+
+        cf1, cf2, cf3 = st.columns(3)
+        f_perp = cf1.number_input("F⟂ Normal / Perpendicular (kN)", value=0.0, help="+ Para fora (Sucção), - Para dentro (Pressão/Sobrecarga)")
+        f_par = cf2.number_input("F∥ Tangencial / Paralela (kN)", value=0.0, help="+ Ao longo da inclinação (+X), - Sentido oposto (-X)")
+        mz_in = cf3.number_input("Mz (kNm)", value=0.0)
+        st.caption("💡 *Exemplo de Vento: F⟂ positivo (+) = sucção perpendicular; F⟂ negativo (-) = sobrepressão perpendicular.*")
 
     if st.button("Salvar Condições nos Nós Selecionados", type="primary", use_container_width=True):
         if not st.session_state.sel_nos:
@@ -526,9 +577,19 @@ with col_p1:
                     st.session_state.dados_nos[idx]["Apoio X"] = ap_x
                     st.session_state.dados_nos[idx]["Apoio Y"] = ap_y
                     st.session_state.dados_nos[idx]["Apoio Rot"] = ap_rot
-                    st.session_state.dados_nos[idx]["Fx (kN)"] = fx
-                    st.session_state.dados_nos[idx]["Fy (kN)"] = fy
-                    st.session_state.dados_nos[idx]["Mz (kNm)"] = mz
+                    st.session_state.dados_nos[idx]["Mz (kNm)"] = mz_in
+
+                    if "Global" in sistema_carga:
+                        st.session_state.dados_nos[idx]["Fx (kN)"] = fx_in
+                        st.session_state.dados_nos[idx]["Fy (kN)"] = fy_in
+                    else:
+                        theta = np.radians(ang_ref_deg) if ang_ref_deg is not None else angulos_locais_dict.get(nid, 0.0)
+                        # Decomposição exata: Tangente = (cos θ, sin θ), Normal = (-sin θ, cos θ)
+                        fx_calc = f_par * np.cos(theta) - f_perp * np.sin(theta)
+                        fy_calc = f_par * np.sin(theta) + f_perp * np.cos(theta)
+                        st.session_state.dados_nos[idx]["Fx (kN)"] = round(fx_calc, 4)
+                        st.session_state.dados_nos[idx]["Fy (kN)"] = round(fy_calc, 4)
+
             st.success(f"Condições aplicadas a {len(st.session_state.sel_nos)} nó(s)!")
             st.rerun()
 
@@ -538,7 +599,7 @@ with col_p2:
     barras_selecionadas_validas = [bid for bid in st.session_state.sel_barras if bid in todas_barras_ids]
 
     sel_barras_input = st.multiselect(
-        "Barras Selecionadas (ou arraste uma caixa no desenho acima):",
+        "Barras Selecionadas (ou arraste uma caixa no desenho):",
         options=todas_barras_ids,
         default=barras_selecionadas_validas
     )
@@ -584,6 +645,40 @@ with col_p2:
             b["Seção"] = sec_escolhida
         st.success(f"Perfil {sec_escolhida} aplicado a todas as barras!")
         st.rerun()
+
+    with st.expander("⚡ Carga Distribuída nas Barras (Converter para Nós)"):
+        st.write("Aplica uma carga linear $q$ (kN/m) nas barras selecionadas e divide automaticamente entre os seus nós extremos.")
+        tipo_q = st.radio("Direção da Carga Distribuída:", ["Local Perpendicular (q⟂ vento)", "Global Vertical (qy gravidade)"], horizontal=True)
+        q_val = st.number_input("Valor de q (kN/m):", value=0.0)
+
+        if st.button("Distribuir Carga nas Barras para os Nós"):
+            if not st.session_state.sel_barras or abs(q_val) < 1e-4:
+                st.warning("Selecione as barras e defina um valor não nulo de q.")
+            else:
+                for bid in st.session_state.sel_barras:
+                    b_obj = next(b for b in st.session_state.dados_barras if b["Barra"] == bid)
+                    n1, n2 = b_obj["Nó Inic."], b_obj["Nó Final"]
+                    xa, ya = coords_map[n1]
+                    xb, yb = coords_map[n2]
+                    comp_barra = np.hypot(xb - xa, yb - ya)
+                    f_total = q_val * comp_barra
+                    f_no = f_total / 2.0
+
+                    if "Local" in tipo_q:
+                        ang_b = np.arctan2(yb - ya, xb - xa)
+                        dfx = -f_no * np.sin(ang_b)
+                        dfy = f_no * np.cos(ang_b)
+                    else:
+                        dfx = 0.0
+                        dfy = f_no
+
+                    for nid in (n1, n2):
+                        idx_n = next(i for i, n in enumerate(st.session_state.dados_nos) if n["Nó"] == nid)
+                        st.session_state.dados_nos[idx_n]["Fx (kN)"] += round(dfx, 4)
+                        st.session_state.dados_nos[idx_n]["Fy (kN)"] += round(dfy, 4)
+
+                st.success("Carga distribuída transferida com sucesso para os nós!")
+                st.rerun()
 
 # -----------------------------------------------------------------------------
 # 9. MOTOR MATRICIAL E DIAGRAMAS
